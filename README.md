@@ -132,6 +132,34 @@ pip uninstall -y onnxruntime && pip install onnxruntime-gpu
 `device="auto"` then picks CUDA. Inputs have variable shapes, so the CPU path is often just as fast for
 single pages; the GPU pays off mostly with dewarping and large batches.
 
+### Language-model rescoring (optional, off by default)
+
+The greedy CTC decode keeps only the best class per frame. On degraded scans the right Thai cluster is often
+the runner-up -- the confusions listed under [Limitations](#limitations) are exactly that -- and a language
+model can tell which candidate makes a word. `lm_path` re-reads only the uncertain positions of each line:
+
+```bash
+# build a model from text in your own domain (plain UTF-8, paragraphs separated by blank lines)
+python -m aksonocr_lite.lm build corpus.txt mymodel.json.gz
+pip install pythainlp                       # the word list used as a guard
+```
+
+```python
+conv = aksonocr_lite.load(lm_path="mymodel.json.gz")
+```
+
+Only Thai-for-Thai substitutions and Thai insertions are ever proposed, and nothing is ever deleted, so
+digits, Latin letters and punctuation come out exactly as the greedy decode read them -- amounts, codes and
+URLs are untouched. A change is kept only when it does not add characters that no dictionary word covers;
+when a real word would be swapped for another real word, the combined score must also improve by
+`lm_margin`. `lm_gate` (default 0.98) leaves confident clusters alone.
+
+Measured on 5,566 lines of scanned Thai government reports the recognizer had not seen, against a
+born-digital text layer as the reference: CER 1.248% -> 0.759%, whole lines correct 88.12% -> 90.68%, with
+every digit of every currency amount unchanged. Rescoring costs 3-18% more time per page. A model built from
+roughly a million characters of in-domain text is enough; the quality depends on that text matching your
+documents, so the gain on other material will differ.
+
 ### Offline / custom weights
 
 Set `AKSONOCR_WEIGHTS=/path/to/dir` to load models from a local folder instead of the Hub. It must contain

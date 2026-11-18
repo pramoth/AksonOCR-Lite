@@ -33,12 +33,13 @@ class Recognizer:
     a cuDNN algorithm search."""
 
     def __init__(self, device: str = "auto", budget: int = 3_000_000, flip: bool = True, flip_margin: float = 0.05,
-                 bucket: int = 16):
+                 bucket: int = 16, rescorer=None):
         self.sess = session("rec.onnx", device)
         self.input = self.sess.get_inputs()[0].name
         self.chars = json.load(open(model_path("rec_charset.json"), encoding="utf-8"))["chars"]
         self.budget, self.flip, self.flip_margin, self.bucket = budget, flip, flip_margin, bucket
         self.gpu = self.sess.get_providers()[0] != "CPUExecutionProvider"
+        self.rescorer = rescorer   # lm.Rescorer or None; None keeps the plain greedy decode
 
     def __call__(self, crops: list[np.ndarray]) -> list[tuple[str, float, float]]:
         """BGR crops -> [(text, confidence, char_confidence)]. With flip=True each crop is also read rotated 180
@@ -74,6 +75,10 @@ class Recognizer:
                 for t, k in enumerate(part):
                     T = max(1, int(math.ceil(xs[k].shape[2] / W * p.shape[1])))  # skip timesteps over the padding
                     out[k] = self._decode(ids[t, :T], pr[t, :T])
+                    if self.rescorer is not None and out[k][0]:
+                        better = self.rescorer(p[t, :T])
+                        if better:
+                            out[k] = (better,) + out[k][1:]
         return out
 
     def _decode(self, ids, probs):

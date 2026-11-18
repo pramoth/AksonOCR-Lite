@@ -123,3 +123,69 @@ def test_block_markdown_can_keep_a_short_caption():
     figure = {"label": "image", "score": .95}
     assert block_markdown(figure, "ข้าวแดงดอย", 1) == "<figure>\n</figure>"
     assert block_markdown(figure, "ข้าวแดงดอย", 1, True) == "<figure>\n</figure>\nข้าวแดงดอย"
+
+
+# ---------------------------------------------------------------- lm rescoring
+def _rescorer(**kw):
+    from aksonocr_lite.lm import CharLM, Rescorer
+
+    lm = CharLM()
+    lm.train("หน่วยงาน ตลาดกลาง การเกษตร ทั้งสิ้น สินค้า " * 30)
+    chars = ["", "ต", "ด", "ล", "า", "ก", "1", "7", "สิ", "สิ้", "น", "ทั้", "ง", "ค้", "."]
+    words = frozenset({"ตลาด", "กลาง", "สินค้า", "ทั้งสิ้น", "ทั้ง", "สิน"})
+    return Rescorer(lm, words, chars, **kw), chars
+
+
+def _post(chars, frames):
+    """frames: list of {cluster: prob}; the rest of the mass goes nowhere (rows need not sum to 1)."""
+    p = np.zeros((len(frames), len(chars)), np.float32)
+    for t, f in enumerate(frames):
+        for c, v in f.items():
+            p[t, chars.index(c)] = v
+    return p
+
+
+def test_rescorer_picks_the_candidate_that_makes_a_word():
+    """ตลาต is what the greedy decode reads; ด is the runner-up on the last frame and ตลาด is a word."""
+    r, chars = _rescorer()
+    p = _post(chars, [{"ต": .99}, {"": .99}, {"ล": .99}, {"": .99}, {"า": .99}, {"": .99}, {"ต": .6, "ด": .4}])
+    assert r(p) == "ตลาด"
+
+
+def test_rescorer_leaves_confident_lines_alone():
+    r, chars = _rescorer()
+    p = _post(chars, [{"ต": .99}, {"": .99}, {"ล": .99}, {"": .99}, {"า": .99}, {"": .99}, {"ต": .99, "ด": .01}])
+    assert r(p) is None
+
+
+def test_rescorer_never_touches_digits_or_punctuation():
+    """A 1 with a strong 7 runner-up, and a '.' with a Thai runner-up, stay exactly as read."""
+    r, chars = _rescorer()
+    p = _post(chars, [{"1": .5, "7": .45}, {"": .99}, {".": .5, "า": .45}, {"": .99}, {"7": .5, "1": .45}])
+    assert r(p) is None
+
+
+def test_rescorer_refuses_a_change_that_leaves_the_dictionary():
+    """สินค้า read correctly but unsurely: the runner-up สิ้ would make a non-word, however the LM scores it."""
+    r, chars = _rescorer(alpha=5.0, margin=0.0)
+    p = _post(chars, [{"สิ": .55, "สิ้": .45}, {"": .99}, {"น": .99}, {"": .99}, {"ค้": .99}, {"": .99}, {"า": .99}])
+    assert r(p) is None
+
+
+def test_rescorer_needs_a_margin_to_swap_one_real_word_for_another():
+    """ทั้งสิน -> ทั้งสิ้น: both segment into dictionary words, so only the score margin decides."""
+    frames = [{"ทั้": .99}, {"": .99}, {"ง": .99}, {"": .99}, {"สิ": .52, "สิ้": .48}, {"": .99}, {"น": .99}]
+    r, chars = _rescorer(margin=0.0)
+    assert r(_post(chars, frames)) == "ทั้งสิ้น"
+    r, chars = _rescorer(margin=1e9)
+    assert r(_post(chars, frames)) is None
+
+
+def test_charlm_roundtrip(tmp_path):
+    from aksonocr_lite.lm import CharLM
+
+    lm = CharLM()
+    lm.train("การเกษตร การตลาด")
+    lm.save(str(tmp_path / "m.json.gz"))
+    again = CharLM.load(str(tmp_path / "m.json.gz"))
+    assert abs(lm.p("การเกษ", "ต") - again.p("การเกษ", "ต")) < 1e-12 and lm.p("การเกษ", "ต") > lm.p("การเกษ", "ด")

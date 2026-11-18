@@ -51,6 +51,13 @@ class Config:
     row_overlap: float = 0.3             # y-overlap (fraction of the shorter block) to count as the same row
     keep_short_captions: bool = False    # emit a figure's text even when it is a single short line. Off keeps
                                          # 1.0.0 behaviour, which discards it silently.
+    lm_path: str | None = None           # character n-gram model (see lm.py). None: plain greedy decode (1.0.0).
+                                         # With a model, uncertain Thai clusters are re-read against it; digits,
+                                         # Latin and punctuation are never changed.
+    lexicon_path: str | None = None      # word list, one per line, for the rescoring guard (default: PyThaiNLP's)
+    lm_alpha: float = 0.2                # weight of the language model against the recognizer's own probability
+    lm_gate: float = 0.98                # clusters the recognizer is at least this sure of are left alone
+    lm_margin: float = 2.0               # score gain required to swap one dictionary word for another
     extra: dict = field(default_factory=dict)
 
 
@@ -63,6 +70,10 @@ class Converter:
                                 box_thresh=c.det_box_thresh, unclip_ratio=c.det_unclip_ratio)
         self.line_ori = LineOrientation(c.small_device)
         self.rec = Recognizer(c.small_device, budget=c.rec_budget, flip=c.line_flip)
+        if c.lm_path:
+            from .lm import CharLM, Rescorer, load_words
+            self.rec.rescorer = Rescorer(CharLM.load(c.lm_path), load_words(c.lexicon_path), self.rec.chars,
+                                         alpha=c.lm_alpha, gate=c.lm_gate, margin=c.lm_margin)
         self.page_ori = PageOrientation(c.small_device) if c.rotate else None
         self.tatr = TableStructure(c.device) if c.tables else None
         self.dewarper = None
