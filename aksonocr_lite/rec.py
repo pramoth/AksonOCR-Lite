@@ -40,18 +40,18 @@ class Recognizer:
         self.budget, self.flip, self.flip_margin, self.bucket = budget, flip, flip_margin, bucket
         self.gpu = self.sess.get_providers()[0] != "CPUExecutionProvider"
 
-    def __call__(self, crops: list[np.ndarray]) -> list[tuple[str, float]]:
-        """BGR crops -> [(text, confidence)]. With flip=True each crop is also read rotated 180 degrees and the
-        reading with the higher per-character log-confidence wins (catches upside-down lines on photos)."""
+    def __call__(self, crops: list[np.ndarray]) -> list[tuple[str, float, float]]:
+        """BGR crops -> [(text, confidence, char_confidence)]. With flip=True each crop is also read rotated 180
+        degrees and the reading with the higher per-character log-confidence wins (catches upside-down lines)."""
         if not crops:
             return []
         if not self.flip:
             return self._run(crops)
         res = self._run(list(crops) + [cv2.rotate(c, cv2.ROTATE_180) for c in crops])
         n, out = len(crops), []
-        norm = lambda t, s: math.log(max(s, 1e-12)) / max(1, len(t))
         for a, b in zip(res[:n], res[n:]):
-            use_b = b[0] and (not a[0] or norm(*b) > norm(*a) + self.flip_margin)
+            # compare on char_confidence: comparable across the two readings' different lengths
+            use_b = b[0] and (not a[0] or math.log(max(b[2], 1e-12)) > math.log(max(a[2], 1e-12)) + self.flip_margin)
             out.append(b if use_b else a)
         return out
 
@@ -60,7 +60,7 @@ class Recognizer:
         groups = defaultdict(list)
         for i, x in enumerate(xs):
             groups[int(math.ceil(x.shape[2] / self.bucket) * self.bucket)].append(i)
-        out = [("", 0.0)] * len(xs)
+        out = [("", 0.0, 0.0)] * len(xs)
         for W, idx in groups.items():
             step = max(1, self.budget // (H * W))
             for s in range(0, len(idx), step):
@@ -77,10 +77,20 @@ class Recognizer:
         return out
 
     def _decode(self, ids, probs):
+        """-> (text, product_confidence, char_confidence)
+
+        `char_confidence` is the geometric mean of the per-character probabilities, computed in
+        log space. Deriving it from the product afterwards does not work: the product underflows
+        to exactly 0.0 as soon as one character is near-zero, and 0.0 ** (1/n) is still 0.0, so a
+        line with one bad character becomes indistinguishable from a line that is entirely wrong.
+        """
         txt, conf, prev = [], [], 0
         for c, q in zip(ids, probs):
             if c != prev and c != 0:
                 txt.append(self.chars[c])
                 conf.append(q)
             prev = c
-        return "".join(txt), float(np.prod(conf)) if conf else 0.0
+        if not conf:
+            return "", 0.0, 0.0
+        lg = np.log(np.clip(np.asarray(conf, dtype=np.float64), 1e-12, 1.0))
+        return "".join(txt), float(np.prod(conf)), float(np.exp(lg.mean()))

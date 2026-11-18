@@ -4,7 +4,8 @@ import numpy as np
 from aksonocr_lite.det import drop_mark_fragments, sorted_boxes
 from aksonocr_lite.layout import Block, fill_missing_order
 from aksonocr_lite.orient import rotate
-from aksonocr_lite.pipeline import assign_lines, block_markdown, filter_bad_lines, format_html_tables
+from aksonocr_lite.pipeline import assign_lines, block_markdown, filter_bad_lines, format_html_tables, row_major
+from aksonocr_lite.rec import Recognizer
 from aksonocr_lite.table import grid_cells, grid_to_html
 
 
@@ -67,3 +68,58 @@ def test_markdown_rendering():
     assert block_markdown({"label": "paragraph_title", "score": 1}, "หัวข้อ", 1) == "## หัวข้อ"
     assert block_markdown({"label": "image", "score": .95}, "x", 1) == "<figure>\n</figure>"
     assert format_html_tables("<table><tr><td>a</td></tr></table>") == "<table>\n<tr>\n<td>a</td>\n</tr>\n</table>"
+
+
+def b(label, x0, y0, x1, y1):
+    return {"label": label, "score": 1.0, "bbox": [x0, y0, x1, y1]}
+
+
+def test_row_major_reads_a_grid_row_left_to_right():
+    """The layout head sequences a 3-column figure grid as column 1 -> column 3 -> column 2."""
+    row = [b("vision_footnote", 369, 1105, 585, 1161),
+           b("vision_footnote", 1118, 1108, 1305, 1165),
+           b("vision_footnote", 718, 1114, 951, 1173)]
+    assert [int(x["bbox"][0]) for x in row_major(row)] == [369, 718, 1118]
+
+
+def test_row_major_keeps_vertically_stacked_blocks_in_order():
+    """Two footnote lines stacked under a table share an x but must not share a row.
+
+    Their centres are only ~60px apart, so grouping rows by centre distance pulls them
+    together and then orders them by a 1px difference in x, reversing the two lines.
+    """
+    stacked = [b("vision_footnote", 194, 1157, 567, 1209),
+               b("vision_footnote", 193, 1222, 748, 1268)]
+    assert [int(x["bbox"][1]) for x in row_major(stacked)] == [1157, 1222]
+
+
+def test_row_major_orders_rows_top_to_bottom():
+    out = row_major([b("text", 0, 200, 100, 230), b("text", 400, 10, 500, 40),
+                     b("text", 0, 10, 100, 40)])
+    assert [(int(x["bbox"][1]), int(x["bbox"][0])) for x in out] == [(10, 0), (10, 400), (200, 0)]
+
+
+class _Rec:
+    """Just enough of Recognizer for the pure CTC decode."""
+    chars = ["", "ก", "ข", "ค"]
+    _decode = Recognizer._decode
+
+
+def test_char_confidence_is_comparable_across_lengths():
+    """`confidence` is the product, so a long clean line scores below a short poor one."""
+    long_clean = _Rec()._decode([1, 2, 1, 2] * 8, [0.97] * 32)
+    short_poor = _Rec()._decode([1, 2], [0.5, 0.5])
+    assert long_clean[1] < short_poor[1] + 0.2      # products say they are comparable
+    assert long_clean[2] > 0.95 > short_poor[2]     # char confidence separates them
+
+
+def test_char_confidence_survives_an_underflowing_product():
+    text, prod, cconf = _Rec()._decode([1, 2] * 5, [0.99] * 9 + [0.0])
+    assert len(text) == 10 and prod == 0.0          # one dead character zeroes the product
+    assert cconf > 0.0                              # the log-space mean still ranks the line
+
+
+def test_block_markdown_can_keep_a_short_caption():
+    figure = {"label": "image", "score": .95}
+    assert block_markdown(figure, "ข้าวแดงดอย", 1) == "<figure>\n</figure>"
+    assert block_markdown(figure, "ข้าวแดงดอย", 1, True) == "<figure>\n</figure>\nข้าวแดงดอย"
