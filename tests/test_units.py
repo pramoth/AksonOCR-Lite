@@ -181,6 +181,15 @@ def test_rescorer_needs_a_margin_to_swap_one_real_word_for_another():
     assert r(_post(chars, frames)) is None
 
 
+def test_rescorer_leaves_short_lines_to_the_greedy_decode():
+    """สิง -> สิน would pass every other rule (it enters the dictionary), but three Thai characters are no context."""
+    frames = [{"สิ": .99}, {"": .99}, {"ง": .6, "น": .4}]
+    r, chars = _rescorer()
+    assert r(_post(chars, frames)) is None
+    r, chars = _rescorer(min_thai=0)
+    assert r(_post(chars, frames)) == "สิน"
+
+
 def test_charlm_roundtrip(tmp_path):
     from aksonocr_lite.lm import CharLM
 

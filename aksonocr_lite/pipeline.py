@@ -58,6 +58,7 @@ class Config:
     lm_alpha: float = 0.2                # weight of the language model against the recognizer's own probability
     lm_gate: float = 0.98                # clusters the recognizer is at least this sure of are left alone
     lm_margin: float = 2.0               # score gain required to swap one dictionary word for another
+    lm_min_thai: int = 4                 # lines with fewer Thai characters than this are not rescored (no context)
     extra: dict = field(default_factory=dict)
 
 
@@ -73,7 +74,8 @@ class Converter:
         if c.lm_path:
             from .lm import CharLM, Rescorer, load_words
             self.rec.rescorer = Rescorer(CharLM.load(c.lm_path), load_words(c.lexicon_path), self.rec.chars,
-                                         alpha=c.lm_alpha, gate=c.lm_gate, margin=c.lm_margin)
+                                         alpha=c.lm_alpha, gate=c.lm_gate, margin=c.lm_margin,
+                                         min_thai=c.lm_min_thai)
         self.page_ori = PageOrientation(c.small_device) if c.rotate else None
         self.tatr = TableStructure(c.device) if c.tables else None
         self.dewarper = None

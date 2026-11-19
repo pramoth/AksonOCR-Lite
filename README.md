@@ -152,10 +152,11 @@ Only Thai-for-Thai substitutions and Thai insertions are ever proposed, and noth
 digits, Latin letters and punctuation come out exactly as the greedy decode read them -- amounts, codes and
 URLs are untouched. A change is kept only when it does not add characters that no dictionary word covers;
 when a real word would be swapped for another real word, the combined score must also improve by
-`lm_margin`. `lm_gate` (default 0.98) leaves confident clusters alone.
+`lm_margin`. `lm_gate` (default 0.98) leaves confident clusters alone, and a line with fewer than `lm_min_thai`
+(default 4) Thai characters is not rescored at all -- a two-letter table cell gives the model no context.
 
 Measured on 5,566 lines of scanned Thai government reports the recognizer had not seen, against a
-born-digital text layer as the reference: CER 1.248% -> 0.759%, whole lines correct 88.12% -> 90.68%, with
+born-digital text layer as the reference: CER 1.248% -> 0.756%, whole lines correct 88.12% -> 90.75%, with
 every digit of every currency amount unchanged. Rescoring costs 3-18% more time per page. A model built from
 roughly a million characters of in-domain text is enough; the quality depends on that text matching your
 documents, so the gain on other material will differ.

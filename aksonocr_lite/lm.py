@@ -8,7 +8,9 @@ candidate makes a word. This module re-reads only the uncertain positions of a l
   ฯ/ๆ are never changed and nothing is ever deleted, so amounts, codes and URLs come out exactly as the greedy
   decode read them;
 * a change is kept only if it does not add out-of-dictionary characters, and - when it leaves that count
-  unchanged (a real word swapped for another real word) - only if the combined score improves by `margin`.
+  unchanged (a real word swapped for another real word) - only if the combined score improves by `margin`;
+* a line with fewer than `min_thai` Thai characters is not rescored at all: a two- or three-letter table cell
+  or abbreviation gives the model no context, so it would only swap in whichever short string is more frequent.
 
 Off by default. Enable with `Config(lm_path=...)`; build a model from your own text with
 `python -m aksonocr_lite.lm build corpus.txt model.json.gz`.
@@ -117,9 +119,10 @@ def load_words(path: str | None = None) -> frozenset[str]:
 
 class Rescorer:
     def __init__(self, lm: CharLM, words: frozenset[str], chars: list[str], alpha: float = 0.2, gate: float = 0.98,
-                 margin: float = 2.0, topk: int = 6, blank_alt: float = 0.03, floor: float = 1e-4, beam: int = 8):
+                 margin: float = 2.0, topk: int = 6, blank_alt: float = 0.03, floor: float = 1e-4, beam: int = 8,
+                 min_thai: int = 4):
         self.lm, self.words, self.chars = lm, words, chars
-        self.alpha, self.gate, self.margin = alpha, gate, margin
+        self.alpha, self.gate, self.margin, self.min_thai = alpha, gate, margin, min_thai
         self.topk, self.blank_alt, self.floor, self.beam = topk, blank_alt, floor, beam
         self.maxw = max((len(w) for w in words), default=0)
         self.thai = np.array([_is_thai(c) for c in chars])
@@ -221,7 +224,9 @@ class Rescorer:
     def __call__(self, p: np.ndarray) -> str | None:
         """p: (T, classes) posteriors of one line. -> corrected text, or None when the greedy reading stands."""
         pos, any_open = self.positions(p)
-        return self.choose(pos) if any_open else None
+        if not any_open or sum(len(_THAI.findall(c[0][0])) for c in pos) < self.min_thai:
+            return None
+        return self.choose(pos)
 
 
 def _main(argv: list[str]) -> int:
